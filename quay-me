@@ -1,0 +1,147 @@
+#!/bin/bash
+
+SCRIPT_VERSION="v1.0.0"
+
+assert_project_name(){
+  local project_name=$1
+
+  if [ -z "$project_name" ]; then
+    usage
+    exit 1
+  fi
+
+  if [ "$project_name" == "-h" -o "$project_name" == "--help" ]; then
+    usage
+    exit 0
+  fi
+
+  if [ "$project_name" == "-v" -o "$project_name" == "--version" ]; then
+    version
+    exit 0
+  fi
+}
+
+assert_rc_file(){
+  if [ ! -f "${HOME}/.quay-merc" ]; then
+    echo "~/.quay-merc missing. Create one that looks like this:"
+    usage_quay_merc
+    exit 1
+  fi
+
+  if [ -z "$(get_namespace)" ]; then
+    echo "NAMESPACE value is missing from ~/.quay-merc, example:"
+    usage_quay_merc
+    exit 1
+  fi
+
+  if [ -z "$(get_token)" ]; then
+    echo "TOKEN value is missing from ~/.quay-merc, example:"
+    usage_quay_merc
+    exit 1
+  fi
+
+  if [ -z "$(get_webhook)" ]; then
+    echo "WEBHOOK value is missing from ~/.quay-merc, example:"
+    usage_quay_merc
+    exit 1
+  fi
+}
+
+create_build_trigger(){
+  local token="$1"
+  local project_name="$2"
+  local namespace="$3"
+  local respository="${namespace}/$project_name"
+
+  local data='{"config":{"build_source":"'${respository}'","branchtag_regex":"tags/v.*","subdir":""}}'
+  local uuid=$(uuidgen | tr '[:upper:]' '[:lower:]')
+
+  curl "https://quay.io/api/v1/repository/${namespace}/${project_name}/trigger/${uuid}/activate" \
+    -X POST \
+    --header "Authorization: Bearer ${token}" \
+    --header "Content-Type: application/json" \
+    --data "${data}"
+}
+
+create_repository(){
+  local token="$1"
+  local project_name="$2"
+  local namespace="$3"
+
+  local data='{"namespace":"'${namespace}'","visibility":"public","repository":"'${project_name}'","description":"'${project_name}'"}'
+
+  curl "https://quay.io/api/v1/repository" \
+    -X POST \
+    --header "Authorization: Bearer ${token}" \
+    --header "Content-Type: application/json" \
+    --data "${data}"
+}
+
+create_webhook(){
+  local token="$1"
+  local project_name="$2"
+  local namespace="$3"
+  local webhook="$4"
+
+  local data='{"eventConfig":{},"title":"Deployinate","config":{"url": "'${webhook}'"},"event":"repo_push","method":"webhook"}'
+
+  curl "https://quay.io/api/v1/repository/${namespace}/${project_name}/notification/" \
+    -X POST \
+    --header "Authorization: Bearer ${token}" \
+    --header "Content-Type: application/json" \
+    --data "${data}"
+}
+
+get_namespace(){
+  grep 'NAMESPACE' "${HOME}/.quay-merc" \
+  | sed -e 's/NAMESPACE=//'
+}
+
+get_token(){
+  grep 'TOKEN' "${HOME}/.quay-merc" \
+  | sed -e 's/TOKEN=//'
+}
+
+get_webhook(){
+  grep 'WEBHOOK' "${HOME}/.quay-merc" \
+  | sed -e 's/WEBHOOK=//'
+}
+
+usage(){
+  echo "USAGE: quay-me <project-name>"
+  echo ""
+  echo "example: quay-me sentinel-google"
+  echo "Create a ~/.quay-merc file to set the NAMESPACE and TOKEN variables"
+  echo ""
+  echo "  -h, --help      print this help text"
+  echo "  -v, --version   print the version"
+  echo ""
+}
+
+usage_quay_merc(){
+  echo ""
+  echo "NAMESPACE=<my-quay-and-github-namespace>"
+  echo "TOKEN=<my-quay-token>"
+  echo "WEBHOOK=<my-post-build-webhook>"
+  echo ""
+}
+
+version(){
+  echo "${SCRIPT_VERSION}"
+}
+
+main(){
+  local project_name="$1"
+
+  assert_rc_file
+  assert_project_name "$project_name"
+
+  local namespace="$(get_namespace)"
+  local token="$(get_token)"
+  local webhook="$(get_webhook)"
+
+  create_repository "$token" "$namespace" "$project_name"
+  create_build_trigger "$token" "$namespace" "$project_name"
+  create_webhook "$token" "$namespace" "$project_name" "$webhook"
+}
+main $@
